@@ -14,35 +14,19 @@ import matplotlib.pyplot as plt
 import os
 from django.conf import settings
 
-POPULATION_SIZE = 300
+
 C1 = 1.5  # Cognitive component
 C2 = 1.5  # Social component
 
 # Number of particles for PSO
 NUM_PARTICLES = 100 
-NUMB_OF_ELITE_SCHEDULES = 10
-TOURNAMENT_SELECTION_SIZE = 5
-MUTATION_RATE = 0.01
-MAX_GENERATIONS = 100  # Define the maximum generations for termination
+MAX_GENERATIONS = 10  # Define the maximum generations for termination
 PENALTY_RATE = 0.01  # Define how much the penalty increases per generation
 VARS = {'generationNum': 0,
         'terminateGens': False}
 
 fitness_values = []
 
-class Population:
-    def __init__(self, size):
-        self._size = size
-        self._schedules = [Schedule().initialize() for _ in range(size)]
-
-    def getSchedules(self):
-        return self._schedules
-    
-    def __str__(self):
-        schedule_descriptions = [str(schedule) for schedule in self._schedules]
-        return (f"Population Size: {self._size}\n"
-                f"Schedules: \n" + "\n".join(schedule_descriptions))
-    
 
 
 class Data:
