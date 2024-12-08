@@ -75,12 +75,51 @@ class Data:
 
 class Class:
     def __init__(self, dept, section, course):
-        self.department = dept      # The department offering the class (e.g., Computer Science)
-        self.course = course        # The specific course (e.g., "Data Structures")
-        self.instructor = None      # Initially, there is no instructor assigned
-        self.meeting_time = None    # Initially, there is no meeting time assigned
-        self.room = None            # Initially, no room is assigned
-        self.section = section 
+        self.department = dept
+        self.course = course
+        self.instructor = None
+        self.meeting_time = None
+        self.room = None
+        self.section = section
+
+    def get_id(self):
+        return self.section_id # see this later
+
+    def get_dept(self):
+        return self.department
+
+    def get_course(self):
+        return self.course
+
+    def get_instructor(self):
+        return self.instructor
+
+    def get_meetingTime(self):
+        return self.meeting_time
+
+    def get_room(self):
+        return self.room
+
+    def set_instructor(self, instructor):
+        self.instructor = instructor
+
+    def set_meetingTime(self, meetingTime):
+        self.meeting_time = meetingTime
+
+    def set_room(self, room):
+        self.room = room
+
+    def get_position(self):
+        return (self.room, self.meeting_time, self.instructor)
+
+    # This method sets the "position" by assigning new values for room, meeting time, and instructor
+    def set_position(self, position):
+        self.room, self.meeting_time, self.instructor = position    
+        
+    def __str__(self):
+        return f"Class(dept={self.department}, course={self.course}, section={self.section}, instructor={self.instructor}, meeting_time={self.meeting_time}, room={self.room})"
+
+
 
 class Schedule:
     def __init__(self):
@@ -143,6 +182,10 @@ class Schedule:
                 self.addCourse(data, course, courses, dept, section)
 
         return self
+    
+    def parse_time(self, time_str):
+        """Convert a time string (e.g., '11:30') to a time object."""
+        return datetime.strptime(time_str.strip(), '%H:%M').time()
 
     def calculateFitness(self):
         self._numberOfHardConflicts = 0
@@ -186,7 +229,95 @@ class Schedule:
         return 1 / (total_conflict + 1)  # Avoid division by zero
 
 
-    # Check methods for hard and soft constraints (same as original)
+    def check_seating_capacity(self, classes, weights):
+        for i in range(len(classes)):
+            if classes[i].room.seating_capacity < int(classes[i].course.max_numb_students):
+                self._numberOfHardConflicts += weights['seating_capacity']
+
+    def check_course_conflicts(self, classes, i, weights):
+        for j in range(i + 1, len(classes)):
+            day_i = str(classes[i].meeting_time).split()[0]
+            day_j = str(classes[j].meeting_time).split()[0]
+            if (classes[i].course.course_name == classes[j].course.course_name and 
+                day_i == day_j and classes[i].section == classes[j].section):
+                self._numberOfHardConflicts += weights['same_course_same_section']
+
+    def check_instructor_conflict(self, classes, i, weights):
+        for j in range(i + 1, len(classes)):
+            if (classes[i].section != classes[j].section and 
+                classes[i].meeting_time == classes[j].meeting_time and 
+                classes[i].instructor == classes[j].instructor):
+                self._numberOfHardConflicts += weights['instructor_conflict']
+
+    def check_duplicate_time(self, classes, i, weights):
+        for j in range(i + 1, len(classes)):
+            if (classes[i].section == classes[j].section and 
+                classes[i].meeting_time == classes[j].meeting_time):
+                self._numberOfHardConflicts += weights['duplicate_time_section']
+
+    def check_instructor_availability(self, classes, i, weights):
+        instructor = classes[i].instructor
+        availability_start = instructor.availability_start
+        availability_end = instructor.availability_end
+        meeting_time_str = classes[i].meeting_time.time
+        start_time_str, end_time_str = meeting_time_str.split(' - ')
+        start_time = self.parse_time(start_time_str)
+        end_time = self.parse_time(end_time_str)
+
+        if start_time < availability_start or end_time > availability_end:
+            self._numberOfHardConflicts += weights['instructor_availability']
+
+    # Check methods for soft constraints
+    def check_consecutive_classes(self, classes, i, weights):
+        for j in range(i + 1, len(classes)):
+            if classes[i].instructor == classes[j].instructor:
+                time_i_end = self.parse_time(classes[i].meeting_time.time.split(' - ')[1])
+                time_j_start = self.parse_time(classes[j].meeting_time.time.split(' - ')[0])
+                if time_i_end == time_j_start:
+                    self._numberOfSoftConflicts += weights['no_consecutive_classes']
+
+    def check_morning_classes(self, classes, i, weights):
+        morning_start = self.parse_time('06:00')
+        morning_end = self.parse_time('12:00')
+        start_time_str, _ = classes[i].meeting_time.time.split(' - ')
+        start_time = self.parse_time(start_time_str)
+
+        if morning_start <= start_time <= morning_end:
+            self._numberOfSoftConflicts += weights['morning_classes'] * 0.5  # Lower penalty for morning classes
+        else:
+            self._numberOfSoftConflicts += weights['morning_classes'] * 3.5  # Higher penalty for non-morning classes
+
+    def check_break_time_conflict(self, classes, i, weights):
+        break_start = self.parse_time('10:00')
+        break_end = self.parse_time('10:50')
+        start_time_str, _ = classes[i].meeting_time.time.split(' - ')
+        start_time = self.parse_time(start_time_str)
+        end_time_str, _ = classes[i].meeting_time.time.split(' - ')
+        end_time = self.parse_time(end_time_str)
+
+        if start_time < break_end and end_time > break_start:
+            self._numberOfSoftConflicts += weights['break_time_conflict']
+
+    def check_balanced_days(self, classes, weights):
+        day_class_count = {}
+        for cls in classes:
+            day = str(cls.meeting_time).split()[0]
+            if day not in day_class_count:
+                day_class_count[day] = 0
+            day_class_count[day] += 1
+        max_day = max(day_class_count.values())
+        min_day = min(day_class_count.values())
+        if max_day - min_day > 2:
+            self._numberOfSoftConflicts += weights['balanced_days']
+
+
+
+        
+    def __str__(self):
+        """Return a string representation of the schedule."""
+        classes_info = [f"{cls.course.course_name} - {cls.meeting_time} - {cls.room}" for cls in self._classes]
+        return f"Schedule with {len(self._classes)} classes:\n" + "\n".join(classes_info)
+
 
 
 class Particle:
@@ -201,16 +332,26 @@ class Particle:
 
     def update_position(self, global_best_position):
         for i in range(len(self.schedule.getClasses())):
+            # Calculate cognitive and social components
             cognitive = C1 * random.random() * (self.best_position.getFitness() - self.schedule.getFitness())
             social = C2 * random.random() * (global_best_position.getFitness() - self.schedule.getFitness())
-            
+
+            # Update velocity
             self.velocity[i] = self.velocity[i] + cognitive + social
             
+            # Get current class and its current position
             current_class = self.schedule.getClasses()[i]
             current_class_position = current_class.get_position()
-            new_position = current_class_position + self.velocity[i]
+
+            # Update the position based on the velocity
+            new_position = (current_class_position[0],  # room
+                            current_class_position[1],  # meeting time
+                            current_class_position[2])  # instructor
+
+            # Update the class with the new position
             current_class.set_position(new_position)
 
+            # Update the best position if current fitness improves
             if self.get_fitness() > self.best_fitness:
                 self.best_position = self.schedule
                 self.best_fitness = self.get_fitness()
