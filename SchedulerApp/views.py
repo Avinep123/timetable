@@ -20,7 +20,7 @@ C2 = 1.5  # Social component
 
 # Number of particles for PSO
 NUM_PARTICLES = 100 
-MAX_GENERATIONS = 10  # Define the maximum generations for termination
+MAX_GENERATIONS = 50  # Define the maximum generations for termination
 PENALTY_RATE = 0.01  # Define how much the penalty increases per generation
 VARS = {'generationNum': 0,
         'terminateGens': False}
