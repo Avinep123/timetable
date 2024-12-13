@@ -21,15 +21,21 @@
       <tr>
         <th>{{ week.0 }}</th>
         {% for time in timeSlots %}
-          <td>
-            {% sub schedule section.department.dept_name week.0 time.0  break_times %}  <!-- Correctly call the sub tag -->
-          </td>
+        <td>
+          {% sub schedule section.department.dept_name week.0 time.0 break_times %} <!-- Correctly call the sub tag -->
+        </td>
         {% endfor %}
       </tr>
       {% endfor %}
     </tbody>
   </table>
   {% endfor %}
+
+  <div>
+    <h3>Fitness vs Penalty Graph</h3>
+    <img src="{{ plot_path }}" alt="Fitness vs Penalty Graph">
+  </div>
+
 </div>
 
 {% endblock %}

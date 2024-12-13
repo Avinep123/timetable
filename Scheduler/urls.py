@@ -17,7 +17,7 @@ urlpatterns = [
     ),
     path('accounts/', include('django.contrib.auth.urls')),
     path('', include('SchedulerApp.urls')),
-]
+]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 handler404 = 'SchedulerApp.views.error_404'
 handler500 = 'SchedulerApp.views.error_500'

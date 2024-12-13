@@ -1,5 +1,7 @@
 from django.urls import path
 from .views import *
+from django.conf.urls.static import static
+from django.conf import settings
 
 urlpatterns = [
     # Home page and timetable generation
@@ -39,4 +41,4 @@ urlpatterns = [
     # API endpoints for timetable generation
     path('api/genNum/', apiGenNum, name='apiGenNum'),
     path('api/terminateGens/', apiterminateGens, name='apiterminateGens')
-]
+]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

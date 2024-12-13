@@ -1,42 +1,37 @@
-from django.http.response import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render, redirect
-from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 from .models import *
 from .forms import *
-from collections import defaultdict
 import random
 from datetime import datetime
 import numpy as np
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import os
 from django.conf import settings
+from collections import defaultdict
 
-
-C1 = 1.5  # Cognitive component
-C2 = 1.5  # Social component
-
-# Number of particles for PSO
-NUM_PARTICLES = 100 
-MAX_GENERATIONS = 50  # Define the maximum generations for termination
-PENALTY_RATE = 0.01  # Define how much the penalty increases per generation
-VARS = {'generationNum': 0,
-        'terminateGens': False}
-
+w=0.5
+# Constants for PSO
+C1 = 2  # Cognitive component
+C2 = 2  # Social component
+TIMESLOTS_PER_DAY = 5
+NUM_PARTICLES = 200
+MAX_GENERATIONS = 1000
+VARS = {'generationNum': 0, 'terminateGens': False}
 fitness_values = []
 
-
-
+# Data class to fetch all data from the models
 class Data:
     def __init__(self):
-        self._rooms = Room.objects.all()
-        self._meetingTimes = MeetingTime.objects.all()
-        self._instructors = Instructor.objects.all()
-        self._courses = Course.objects.all()
-        self._depts = Department.objects.all()
-        self._sections = Section.objects.all()
+        self._rooms = list(Room.objects.all())
+        self._meetingTimes = list(MeetingTime.objects.all())
+        self._instructors = list(Instructor.objects.all())
+        self._courses = list(Course.objects.all())
+        self._depts = list(Department.objects.all())
+        self._sections = list(Section.objects.all())
 
     def get_rooms(self):
         return self._rooms
@@ -60,51 +55,45 @@ class Data:
 class Class:
     def __init__(self, dept, section, course):
         self.department = dept
-        self.course = course
+        self.course = course  # course should be an object or value
         self.instructor = None
         self.meeting_time = None
         self.room = None
         self.section = section
 
-    def get_id(self):
-        return self.section_id # see this later
-
-    def get_dept(self):
-        return self.department
-
-    def get_course(self):
-        return self.course
+    def set_instructor(self, instructor):
+        self.instructor = instructor
 
     def get_instructor(self):
         return self.instructor
 
-    def get_meetingTime(self):
-        return self.meeting_time
-
-    def get_room(self):
-        return self.room
-
-    def set_instructor(self, instructor):
-        self.instructor = instructor
-
     def set_meetingTime(self, meetingTime):
         self.meeting_time = meetingTime
+
+    def get_meetingTime(self):
+        return self.meeting_time
 
     def set_room(self, room):
         self.room = room
 
+    def get_room(self):
+        return self.room
+
+    def get_course(self):
+        return self.course  # Return the course object or its details
+
     def get_position(self):
         return (self.room, self.meeting_time, self.instructor)
 
-    # This method sets the "position" by assigning new values for room, meeting time, and instructor
     def set_position(self, position):
-        self.room, self.meeting_time, self.instructor = position    
-        
+        self.room, self.meeting_time, self.instructor = position
+
     def __str__(self):
         return f"Class(dept={self.department}, course={self.course}, section={self.section}, instructor={self.instructor}, meeting_time={self.meeting_time}, room={self.room})"
 
 
 
+# Schedule class to calculate fitness and manage course placement
 class Schedule:
     def __init__(self):
         self._data = data
@@ -127,19 +116,13 @@ class Schedule:
         return self._fitness
 
     def addCourse(self, data, course, courses, dept, section):
-        newClass = Class(dept, section.section_id, course)
-
-        newClass.set_meetingTime(
-            data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
-
-        newClass.set_room(
-            data.get_rooms()[random.randrange(0, len(data.get_rooms()))])
-
+        newClass = Class(dept, section.section_id, course)  # Ensure `course` is passed correctly
+        newClass.set_meetingTime(data.get_meetingTimes()[random.randrange(0, len(data.get_meetingTimes()))])
+        newClass.set_room(data.get_rooms()[random.randrange(0, len(data.get_rooms()))])
         crs_inst = course.instructors.all()
-        newClass.set_instructor(
-            crs_inst[random.randrange(0, len(crs_inst))])
-
+        newClass.set_instructor(crs_inst[random.randrange(0, len(crs_inst))])
         self._classes.append(newClass)
+
 
     def initialize(self):
         sections = Section.objects.all()
@@ -147,13 +130,11 @@ class Schedule:
         for section in sections:
             dept = section.department
             n = section.num_class_in_week
-
             available_meeting_times = len(data.get_meetingTimes())
             if n > available_meeting_times:
                 n = available_meeting_times
 
             courses = dept.courses.all()
-
             classes_to_add = n // len(courses)
 
             for course in courses:
@@ -166,185 +147,128 @@ class Schedule:
                 self.addCourse(data, course, courses, dept, section)
 
         return self
+
+
+    from collections import defaultdict
+
     
-    def parse_time(self, time_str):
-        """Convert a time string (e.g., '11:30') to a time object."""
-        return datetime.strptime(time_str.strip(), '%H:%M').time()
-
     def calculateFitness(self):
-        self._numberOfHardConflicts = 0
-        self._numberOfSoftConflicts = 0
-        classes = self.getClasses()
-
-        hard_weights = {
-            'seating_capacity': 1,
-            'same_course_same_section': 1.5,
-            'instructor_conflict': 2,
-            'duplicate_time_section': 2,
-            'instructor_availability': 2,
+        conflicts = 0
+        penalties = {
+            "seating_capacity": 10,
+            "same_course_same_section": 10,
+            "instructor_conflict": 20,
+            "duplicate_time_section": 20,
+            "instructor_availability": 20,
+            "empty_timeslot": 20
         }
 
-        soft_weights = {
-            'no_consecutive_classes': 0.5,
-            'morning_classes': 1,
-            'break_time_conflict': 0.3,
-            'balanced_days': 0.3
-        }
+        max_possible_conflicts = sum(penalties.values())
 
-        self.check_seating_capacity(classes, hard_weights)
-        for i in range(len(classes)):
-            self.check_course_conflicts(classes, i, hard_weights)
-            self.check_instructor_conflict(classes, i, hard_weights)
-            self.check_duplicate_time(classes, i, hard_weights)
-            self.check_instructor_availability(classes, i, hard_weights)
+        instructor_time_conflict = {}
+        room_time_conflict = {}
+        section_timeslot_conflict = {}
+        timeslot_occupancy = defaultdict(int)
 
-        for i in range(len(classes)):
-            self.check_consecutive_classes(classes, i, soft_weights)
-            self.check_morning_classes(classes, i, soft_weights)
-            self.check_break_time_conflict(classes, i, soft_weights)
+        for c in self.getClasses():
+            timeslot_id = c.get_meetingTime().pid
+            instructor_id = c.get_instructor().id
+            room_id = c.get_room().id
+            section_id = c.section
 
-        self.check_balanced_days(classes, soft_weights)
+            timeslot_occupancy[timeslot_id] += 1
 
-        total_conflict = (self._numberOfHardConflicts * 10) + self._numberOfSoftConflicts
-        # Apply generation iteration penalty (using a simple linear increase in penalty)
-        generation_penalty = VARS['generationNum'] * PENALTY_RATE
-        total_conflict += generation_penalty  # Increase the conflict count with the penalty
+            conflict_penalty = self.check_and_add_penalties(
+                instructor_time_conflict, instructor_id, timeslot_id, penalties["instructor_conflict"],
+                room_time_conflict, room_id, timeslot_id, penalties["seating_capacity"],
+                section_timeslot_conflict, section_id, timeslot_id, penalties["same_course_same_section"]
+            )
 
-        return 1 / (total_conflict + 1)  # Avoid division by zero
+            conflicts += conflict_penalty
 
+        for timeslot in data.get_meetingTimes():
+            if timeslot_occupancy[timeslot.pid] == 0:
+                conflicts += penalties["empty_timeslot"]
 
-    def check_seating_capacity(self, classes, weights):
-        for i in range(len(classes)):
-            if classes[i].room.seating_capacity < int(classes[i].course.max_numb_students):
-                self._numberOfHardConflicts += weights['seating_capacity']
+        fitness = 1 - (conflicts / max_possible_conflicts)
 
-    def check_course_conflicts(self, classes, i, weights):
-        for j in range(i + 1, len(classes)):
-            day_i = str(classes[i].meeting_time).split()[0]
-            day_j = str(classes[j].meeting_time).split()[0]
-            if (classes[i].course.course_name == classes[j].course.course_name and 
-                day_i == day_j and classes[i].section == classes[j].section):
-                self._numberOfHardConflicts += weights['same_course_same_section']
+        print(f"Total penalty for this generation: {conflicts}")
+        self._numberOfConflicts = conflicts
+        return fitness
 
-    def check_instructor_conflict(self, classes, i, weights):
-        for j in range(i + 1, len(classes)):
-            if (classes[i].section != classes[j].section and 
-                classes[i].meeting_time == classes[j].meeting_time and 
-                classes[i].instructor == classes[j].instructor):
-                self._numberOfHardConflicts += weights['instructor_conflict']
+    def check_and_add_penalties(self, instructor_time_conflict, instructor_id, timeslot_id, instructor_penalty,
+                                room_time_conflict, room_id, timeslot_id_room, room_penalty,
+                                section_timeslot_conflict, section_id, timeslot_id_section, section_penalty):
+        conflicts = 0
 
-    def check_duplicate_time(self, classes, i, weights):
-        for j in range(i + 1, len(classes)):
-            if (classes[i].section == classes[j].section and 
-                classes[i].meeting_time == classes[j].meeting_time):
-                self._numberOfHardConflicts += weights['duplicate_time_section']
-
-    def check_instructor_availability(self, classes, i, weights):
-        instructor = classes[i].instructor
-        availability_start = instructor.availability_start
-        availability_end = instructor.availability_end
-        meeting_time_str = classes[i].meeting_time.time
-        start_time_str, end_time_str = meeting_time_str.split(' - ')
-        start_time = self.parse_time(start_time_str)
-        end_time = self.parse_time(end_time_str)
-
-        if start_time < availability_start or end_time > availability_end:
-            self._numberOfHardConflicts += weights['instructor_availability']
-
-    # Check methods for soft constraints
-    def check_consecutive_classes(self, classes, i, weights):
-        for j in range(i + 1, len(classes)):
-            if classes[i].instructor == classes[j].instructor:
-                time_i_end = self.parse_time(classes[i].meeting_time.time.split(' - ')[1])
-                time_j_start = self.parse_time(classes[j].meeting_time.time.split(' - ')[0])
-                if time_i_end == time_j_start:
-                    self._numberOfSoftConflicts += weights['no_consecutive_classes']
-
-    def check_morning_classes(self, classes, i, weights):
-        morning_start = self.parse_time('06:00')
-        morning_end = self.parse_time('12:00')
-        start_time_str, _ = classes[i].meeting_time.time.split(' - ')
-        start_time = self.parse_time(start_time_str)
-
-        if morning_start <= start_time <= morning_end:
-            self._numberOfSoftConflicts += weights['morning_classes'] * 0.5  # Lower penalty for morning classes
+        if timeslot_id in instructor_time_conflict and instructor_id in instructor_time_conflict[timeslot_id]:
+            conflicts += instructor_penalty
         else:
-            self._numberOfSoftConflicts += weights['morning_classes'] * 3.5  # Higher penalty for non-morning classes
+            instructor_time_conflict.setdefault(timeslot_id, []).append(instructor_id)
 
-    def check_break_time_conflict(self, classes, i, weights):
-        break_start = self.parse_time('10:00')
-        break_end = self.parse_time('10:50')
-        start_time_str, _ = classes[i].meeting_time.time.split(' - ')
-        start_time = self.parse_time(start_time_str)
-        end_time_str, _ = classes[i].meeting_time.time.split(' - ')
-        end_time = self.parse_time(end_time_str)
+        if timeslot_id in room_time_conflict and room_id in room_time_conflict[timeslot_id]:
+            conflicts += room_penalty
+        else:
+            room_time_conflict.setdefault(timeslot_id, []).append(room_id)
 
-        if start_time < break_end and end_time > break_start:
-            self._numberOfSoftConflicts += weights['break_time_conflict']
+        if section_id in section_timeslot_conflict and timeslot_id in section_timeslot_conflict[section_id]:
+            conflicts += section_penalty
+        else:
+            section_timeslot_conflict.setdefault(section_id, []).append(timeslot_id)
 
-    def check_balanced_days(self, classes, weights):
-        day_class_count = {}
-        for cls in classes:
-            day = str(cls.meeting_time).split()[0]
-            if day not in day_class_count:
-                day_class_count[day] = 0
-            day_class_count[day] += 1
-        max_day = max(day_class_count.values())
-        min_day = min(day_class_count.values())
-        if max_day - min_day > 2:
-            self._numberOfSoftConflicts += weights['balanced_days']
+        return conflicts
+
+  
 
 
 
-        
+
+
+
+
     def __str__(self):
-        """Return a string representation of the schedule."""
-        classes_info = [f"{cls.course.course_name} - {cls.meeting_time} - {cls.room}" for cls in self._classes]
-        return f"Schedule with {len(self._classes)} classes:\n" + "\n".join(classes_info)
+        return f"Schedule with {len(self._classes)} classes."
 
-
-
+# Particle class representing each particle in the PSO algorithm
+# Particle class representing each particle in the PSO algorithm
 class Particle:
     def __init__(self, schedule=None):
         self.schedule = schedule if schedule else Schedule().initialize()
+        self._isFitnessChanged = True
         self.velocity = [random.uniform(-1, 1) for _ in range(len(self.schedule.getClasses()))]
         self.best_position = self.schedule
-        self.best_fitness = self.get_fitness()
+        self.best_fitness = self.getFitness()
 
-    def get_fitness(self):
+    def getFitness(self):
         return self.schedule.getFitness()
 
     def update_position(self, global_best_position):
         for i in range(len(self.schedule.getClasses())):
-            # Calculate cognitive and social components
             cognitive = C1 * random.random() * (self.best_position.getFitness() - self.schedule.getFitness())
             social = C2 * random.random() * (global_best_position.getFitness() - self.schedule.getFitness())
 
-            # Update velocity
-            self.velocity[i] = self.velocity[i] + cognitive + social
-            
-            # Get current class and its current position
+            # Update velocity with inertia weight
+            self.velocity[i] = w * self.velocity[i] + cognitive + social
+            self.velocity[i] = np.clip(self.velocity[i], -1, 1)  # Ensure velocity remains within bounds
+
             current_class = self.schedule.getClasses()[i]
-            current_class_position = current_class.get_position()
+            new_meeting_time = data.get_meetingTimes()[random.randint(0, len(data.get_meetingTimes()) - 1)]
+            new_room = data.get_rooms()[random.randint(0, len(data.get_rooms()) - 1)]
+            new_instructor = current_class.get_instructor()
 
-            # Update the position based on the velocity
-            new_position = (current_class_position[0],  # room
-                            current_class_position[1],  # meeting time
-                            current_class_position[2])  # instructor
-
-            # Update the class with the new position
+            new_position = (new_room, new_meeting_time, new_instructor)
             current_class.set_position(new_position)
 
-            # Update the best position if current fitness improves
-            if self.get_fitness() > self.best_fitness:
+            if self.getFitness() > self.best_fitness:
                 self.best_position = self.schedule
-                self.best_fitness = self.get_fitness()
+                self.best_fitness = self.getFitness()
 
 
+# Main PSO optimization class
 class ParticleSwarmOptimization:
     def __init__(self):
         self.particles = [Particle() for _ in range(NUM_PARTICLES)]
-        self.global_best_position = max(self.particles, key=lambda p: p.get_fitness()).best_position
+        self.global_best_position = max(self.particles, key=lambda p: p.getFitness()).best_position
         self.global_best_fitness = self.global_best_position.getFitness()
 
     def evolve(self):
@@ -354,62 +278,86 @@ class ParticleSwarmOptimization:
         self.global_best_position = max(self.particles, key=lambda p: p.best_fitness).best_position
         self.global_best_fitness = self.global_best_position.getFitness()
 
-
+# Django view for timetable
+data = None
 @login_required
 def timetable(request):
     global data
-    data = Data()
-    time_slots = TIME_SLOTS
+    if not data:  # Initialize if it's not already initialized
+        data = Data()
+
 
     pso = ParticleSwarmOptimization()
     VARS['generationNum'] = 0
     VARS['terminateGens'] = False
-    fitness_values = []
 
+    fitness_values = []
+    penalties = []
+
+    # Run the PSO algorithm until a solution is found or max generations are reached
     while (pso.global_best_fitness != 1.0) and (VARS['generationNum'] <= MAX_GENERATIONS):
         if VARS['terminateGens']:
             return HttpResponse('')
 
+        # Evolve the particles in the current generation
         pso.evolve()
+
         VARS['generationNum'] += 1
+        current_fitness = pso.global_best_fitness
+        current_penalty = pso.global_best_position.getNumbOfConflicts()
 
-        fitness_values.append(pso.global_best_fitness)
-        print(f'\n> Generation #{VARS["generationNum"]}, Fitness: {pso.global_best_fitness}')
+        # Track fitness and penalty values for every generation
+        fitness_values.append(current_fitness)
+        penalties.append(current_penalty)
 
+        # Print fitness and penalty values for each generation
+        print(f"Generation {VARS['generationNum']}: Fitness = {current_fitness}, Penalty = {current_penalty}")
+
+    # After the loop ends, plot fitness vs. penalty over generations
+    print(f"Fitness values: {fitness_values}")
+    print(f"Penalties: {penalties}")
+
+    # Plot fitness vs. penalty over generations
     plt.figure(figsize=(10, 5))
-    plt.plot(range(len(fitness_values)), fitness_values)
-    plt.title('Fitness Over Generations')
-    plt.xlabel('Generation Number')
-    plt.ylabel('Fitness')
-    plt.grid(True)
+    plt.plot(range(len(fitness_values)), fitness_values, label='Fitness', color='b')
+    plt.plot(range(len(penalties)), penalties, label='Penalty', color='r', linestyle='--')
+    plt.xlabel('Generation')
+    plt.ylabel('Value')
+    plt.title('Fitness vs Penalty Over Generations')
+    plt.legend()
 
-    plot_path = os.path.join(settings.MEDIA_ROOT, 'fitness_plot_pso.png')
+    plot_path = os.path.join(settings.MEDIA_ROOT, 'fitness_vs_penalty.png')
     plt.savefig(plot_path)
+
     plt.close()
+    break_time_slot = '10:00 - 10:50'  # The break time you want to use
+    week_days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']  # List of weekdays
 
-    break_time_slot = '10:00 - 10:50'
-    week_days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
-
+    # Generate break times for all weekdays
     break_times = [(break_time_slot, day) for day in week_days]
 
+    # Render the timetable with the generated schedule and plot
     return render(
         request, 'timetable.html', {
             'schedule': pso.global_best_position.getClasses(),
             'sections': data.get_sections(),
             'times': data.get_meetingTimes(),
-            'timeSlots': time_slots,
+            'timeSlots': TIME_SLOTS,
             'weekDays': DAYS_OF_WEEK,
             'break_times': break_times,
-        })
+            'plot_path': plot_path
+        }
+    )
+
 
 
 def apiGenNum(request):
     return JsonResponse({'genNum': VARS['generationNum']})
 
-
 def apiterminateGens(request):
     VARS['terminateGens'] = True
     return redirect('home')
+
 
 
 def home(request):
@@ -584,8 +532,6 @@ def sectionDelete(request, pk):
     if request.method == 'POST':
         sec.delete()
         return redirect('sectionEdit')
-
-
 
 
 '''
